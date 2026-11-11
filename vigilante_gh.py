@@ -94,7 +94,7 @@ def revisar_roblox(estado):
             print(f"Roblox juego #{n}: revisado ({'con' if jugando else 'sin'} jugadores).")
             info["anterior"] = jugando
         except Exception as e:
-            print(f"Roblox juego #{n}: error ({type(e).__name__}).")
+            print(f"Roblox juego #{n}: error ({describir_error(e)}).")
 
 
 # ----------------------- YOUTUBE -----------------------
@@ -114,8 +114,13 @@ def youtube_channel_id(texto):
     raise ValueError("no se encontró el ID del canal")
 
 
-def youtube_videos(channel_id):
-    raiz = ET.fromstring(descargar(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"))
+def describir_error(e):
+    codigo = getattr(e, "code", None)
+    return f"{type(e).__name__} {codigo}" if codigo else type(e).__name__
+
+
+def videos_desde_feed(url):
+    raiz = ET.fromstring(descargar(url))
     nombre = raiz.findtext("atom:title", default="el canal", namespaces=NS)
     videos = []
     for entry in raiz.findall("atom:entry", NS):
@@ -123,6 +128,40 @@ def youtube_videos(channel_id):
         titulo = entry.findtext("atom:title", default="(sin título)", namespaces=NS)
         videos.append((vid, titulo, f"https://www.youtube.com/watch?v={vid}"))
     return nombre, videos
+
+
+def videos_desde_pagina(channel_id):
+    html = descargar(f"https://www.youtube.com/channel/{channel_id}/videos").decode("utf-8", "ignore")
+    m = re.search(r'<meta property="og:title" content="([^"]*)"', html)
+    nombre = m.group(1) if m else "el canal"
+    videos = []
+    patron = r'"videoId":"([\w-]{11})".{0,1500}?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"'
+    for vid, titulo in re.findall(patron, html):
+        if vid not in [v[0] for v in videos]:
+            try:
+                titulo = json.loads(f'"{titulo}"')
+            except ValueError:
+                pass
+            videos.append((vid, titulo, f"https://www.youtube.com/watch?v={vid}"))
+    if not videos:
+        raise ValueError("la página no tenía videos")
+    return nombre, videos[:15]
+
+
+def youtube_videos(channel_id):
+    """Prueba 3 métodos, porque YouTube a veces falla o bloquea alguno."""
+    intentos = [
+        ("feed del canal", lambda: videos_desde_feed(f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}")),
+        ("feed de subidas", lambda: videos_desde_feed(f"https://www.youtube.com/feeds/videos.xml?playlist_id=UU{channel_id[2:]}")),
+        ("página de videos", lambda: videos_desde_pagina(channel_id)),
+    ]
+    fallos = []
+    for metodo, funcion in intentos:
+        try:
+            return funcion()
+        except Exception as e:
+            fallos.append(f"{metodo}: {describir_error(e)}")
+    raise RuntimeError("; ".join(fallos))
 
 
 def revisar_youtube(estado):
@@ -144,7 +183,7 @@ def revisar_youtube(estado):
             info["vistos"] = list(dict.fromkeys(ids + info["vistos"]))[:100]
             print(f"YouTube canal #{n}: revisado, {len(nuevos)} nuevo(s).")
         except Exception as e:
-            print(f"YouTube canal #{n}: error ({type(e).__name__}).")
+            print(f"YouTube canal #{n}: error ({e if isinstance(e, RuntimeError) else describir_error(e)}).")
 
 
 def main():
